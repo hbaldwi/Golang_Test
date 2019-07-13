@@ -124,45 +124,31 @@ func (g *consumer_group) consume(consumer_num int) {
 	// Channel won't be closed, so no need to check for err
 	defer g.wg.Done()
 
-	// A range statement over the channel doesn't work because it'll block if the producers shut down
-	for {
-		consume_str, err := g.getConsumeMessage(consumer_num)
-		if consume_str != "" && err == nil {
-			fmt.Printf(consume_str)
-		} else if err != nil {
-			return
-		}
+	// Will continue until channel is closed from main
+	for val := range g.widget_chan {
+		consume_str := g.getConsumeMessage(val, consumer_num)
+		fmt.Printf(consume_str)
 	}
+	return
 }
 
 // Returns the message that the consumer should print out
-func (g *consumer_group) getConsumeMessage(consumer_num int) (string, error) {
+func (g *consumer_group) getConsumeMessage(val widget, consumer_num int) string {
 	// Default case will only be picked if there's nothing on the channel
-	select {
-	case val := <-g.widget_chan:
-		if val.broken {
-			*g.producersShouldStop = true
-			return fmt.Sprintf("%s found a broken widget %s -- stopping production\n", "Consumer_"+strconv.Itoa(consumer_num), val), nil
-		} else {
-			return fmt.Sprintf("%s consumed %s in %s time\n", "Consumer_"+strconv.Itoa(consumer_num), val, time.Now().Sub(val.time)), nil
-		}
-	default:
-		time.Sleep(10) // Just to reduce the busy waiting here
-		if *g.producers_done {
-			return "", errors.New("Producers are done, and the channel is empty")
-		}
+	if val.broken {
+		*g.producersShouldStop = true
+		return fmt.Sprintf("%s found a broken widget %s -- stopping production\n", "Consumer_"+strconv.Itoa(consumer_num), val)
+	} else {
+		return fmt.Sprintf("%s consumed %s in %s time\n", "Consumer_"+strconv.Itoa(consumer_num), val, time.Now().Sub(val.time))
 	}
-	return "", nil
 }
 
 // A constructor to simplify consumer group initialization
-func newConsumer_Group(numConsumers int, widget_chan chan widget, wg *sync.WaitGroup, shouldStop, producers_done *bool) consumer_group {
+func newConsumer_Group(numConsumers int, widget_chan chan widget, wg *sync.WaitGroup, shouldStop *bool) consumer_group {
 	return consumer_group{number_consumers: numConsumers,
 		widget_chan:         widget_chan,
 		wg:                  wg,
-		producersShouldStop: shouldStop,
-		producers_done:      producers_done}
-
+		producersShouldStop: shouldStop}
 }
 
 // Parses command line arguments and returns quantities for tunable parameters
@@ -228,15 +214,14 @@ func main() {
 	c_wg.Add(numConsumers)
 
 	producersShouldStop := false
-	producers_done := false
 
 	p_group := newProducer_Group(numProducers, numWidgets, kthBadWidget, widget_chan, &producersShouldStop, &p_wg)
-	c_group := newConsumer_Group(numConsumers, widget_chan, &c_wg, &producersShouldStop, &producers_done)
+	c_group := newConsumer_Group(numConsumers, widget_chan, &c_wg, &producersShouldStop)
 
 	p_group.spawnProducers()
 	c_group.spawnConsumers()
 
-	p_wg.Wait()           // Will wait until all producers exit
-	producers_done = true // enables consumers to return
+	p_wg.Wait()        // Will wait until all producers exit
+	close(widget_chan) // Signal consumers to return
 	c_wg.Wait()
 }

@@ -11,9 +11,10 @@ channel, sends into the channel will not block provided that the buffer isn't
 full.  Upon consuming a broken widget, a consumer signals that the production
 line should halt by setting a shared bool, producersShouldStop, to true. After
 producersShouldStop has been set to true, each producer goroutine will produce
-up to one additional widget, after which it will return. No consumer will exit
-until all of the producers have exited and the channel is empty, ensuring that
-all produced widgets will be consumed.
+up to one additional widget, after which it will return. After all producers 
+have returned, the channel will be closed, causing the consumers to return.
+There is no guarantee that all produced widgets will be consumed if a broken
+widget is encountered.
 
 ## Alternative Implementations
 If minimizing production after producers are signaled to stop (after

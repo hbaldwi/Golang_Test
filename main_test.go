@@ -1,6 +1,7 @@
 package main
 
 import (
+	"regexp"
 	"sync"
 	"testing"
 	"time"
@@ -57,28 +58,22 @@ func TestConsumers(t *testing.T) {
 	widget_chan := make(chan widget, numWidgets)
 	var wg sync.WaitGroup
 	shouldStop := false
-	producersDone := false
 
-	c_group := newConsumer_Group(numConsumers, widget_chan, &wg, &shouldStop, &producersDone)
+	c_group := newConsumer_Group(numConsumers, widget_chan, &wg, &shouldStop)
+
+	var validNormalWidget = regexp.MustCompile(`^Consumer_1 consumed \[id=[0-9]* source=Producer_[0-9]* time=[0-9]*:[0-9]*:[0-9]*.[0-9]* broken=false] in .* time`)
+	var validBrokenWidget = regexp.MustCompile(`^Consumer_1 found a broken widget \[id=[0-9]* source=Producer_[0-9]* time=[0-9]*:[0-9]*:[0-9]*.[0-9]* broken=true] -- stopping production`)
 
 	// Test normal widget consumption
-	widget_chan <- widget{"1", "Producer_1", time.Now(), false}
-	w_str, err := c_group.getConsumeMessage(1)
-	if w_str == "" || err != nil {
+	w_str := c_group.getConsumeMessage(widget{"1", "Producer_1", time.Now(), false}, 1)
+	if !validNormalWidget.MatchString(w_str) {
 		t.Errorf("getConsumeMessage has incorrect behavior on initial widget")
 	}
 
 	// Test broken widget consumption
-	widget_chan <- widget{"2", "Producer_1", time.Now(), true}
-	_, err2 := c_group.getConsumeMessage(1)
-	if err2 != nil || shouldStop != true {
+	w_str2 := c_group.getConsumeMessage(widget{"1", "Producer_1", time.Now(), true}, 1)
+	if !validBrokenWidget.MatchString(w_str2) || shouldStop != true {
 		t.Errorf("getConsumeMesage not recognizing broken widgets")
-	}
-
-	producersDone = true
-	w_str3, err3 := c_group.getConsumeMessage(1)
-	if w_str3 != "" || err3 == nil {
-		t.Errorf("getConsumeMessage not behaving correctly after setting producersDone to true")
 	}
 
 }
