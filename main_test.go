@@ -12,40 +12,42 @@ func TestProducers(t *testing.T) {
 	numWidgets := 2
 	kthBadWidget := 2
 	shouldStop := false
-	widget_chan := make(chan widget, numWidgets)
+	widgetChan := make(chan widget, numWidgets)
 	var wg sync.WaitGroup
 
-	p_group := newProducer_Group(numProducers, numWidgets, kthBadWidget, widget_chan, &shouldStop, &wg)
+	shouldStopMutex := sync.Mutex{}
+
+	producerGroup := newProducerGroup(numProducers, numWidgets, kthBadWidget, widgetChan, &shouldStop, &wg, &shouldStopMutex)
 
 	// Initial widget, should be normal
-	w, _ := p_group.getWidget(1)
+	w, _ := producerGroup.getWidget(1)
 	if w.source != "Producer_1" || w.broken != false || w.id != "1" {
 		t.Errorf("First widget is incorrect: %s", w)
 	}
-	if p_group.current_id != 2 {
+	if producerGroup.currentID != 2 {
 		t.Errorf("Did not increment id")
 	}
 
 	// Second widget, should be broken
-	w2, _ := p_group.getWidget(1)
+	w2, _ := producerGroup.getWidget(1)
 	if w2.broken != true {
 		t.Errorf("kth widget not broken: %s", w2)
 	}
 
 	// Third widget, should return an error
-	_, err3 := p_group.getWidget(1)
+	_, err3 := producerGroup.getWidget(1)
 	if err3 == nil {
 		t.Errorf("Error isn't nil")
 	}
 
-	if p_group.numOfWidgets != 0 {
+	if producerGroup.numOfWidgets != 0 {
 		t.Errorf("Number of widgets remaining not decremented correctly")
 	}
 
 	shouldStop = true
 	// Test with should stop being true
-	p_group_2 := newProducer_Group(numProducers, numWidgets, kthBadWidget, widget_chan, &shouldStop, &wg)
-	_, err4 := p_group_2.getWidget(1)
+	producerGroup2 := newProducerGroup(numProducers, numWidgets, kthBadWidget, widgetChan, &shouldStop, &wg, &shouldStopMutex)
+	_, err4 := producerGroup2.getWidget(1)
 	if err4 == nil {
 		t.Errorf("getWidget not heeding stop signals correctly")
 	}
@@ -55,24 +57,25 @@ func TestProducers(t *testing.T) {
 func TestConsumers(t *testing.T) {
 	numConsumers := 1
 	numWidgets := 100
-	widget_chan := make(chan widget, numWidgets)
+	widgetChan := make(chan widget, numWidgets)
 	var wg sync.WaitGroup
 	shouldStop := false
+	shouldStopMutex := sync.Mutex{}
 
-	c_group := newConsumer_Group(numConsumers, widget_chan, &wg, &shouldStop)
+	consumerGroup := newConsumerGroup(numConsumers, widgetChan, &wg, &shouldStop, &shouldStopMutex)
 
 	var validNormalWidget = regexp.MustCompile(`^Consumer_1 consumed \[id=[0-9]* source=Producer_[0-9]* time=[0-9]*:[0-9]*:[0-9]*.[0-9]* broken=false] in .* time`)
 	var validBrokenWidget = regexp.MustCompile(`^Consumer_1 found a broken widget \[id=[0-9]* source=Producer_[0-9]* time=[0-9]*:[0-9]*:[0-9]*.[0-9]* broken=true] -- stopping production`)
 
 	// Test normal widget consumption
-	w_str := c_group.getConsumeMessage(widget{"1", "Producer_1", time.Now(), false}, 1)
-	if !validNormalWidget.MatchString(w_str) {
+	widgetStr := consumerGroup.getConsumeMessage(widget{"1", "Producer_1", time.Now(), false}, 1)
+	if !validNormalWidget.MatchString(widgetStr) {
 		t.Errorf("getConsumeMessage has incorrect behavior on initial widget")
 	}
 
 	// Test broken widget consumption
-	w_str2 := c_group.getConsumeMessage(widget{"1", "Producer_1", time.Now(), true}, 1)
-	if !validBrokenWidget.MatchString(w_str2) || shouldStop != true {
+	widgetStr2 := consumerGroup.getConsumeMessage(widget{"1", "Producer_1", time.Now(), true}, 1)
+	if !validBrokenWidget.MatchString(widgetStr2) || shouldStop != true {
 		t.Errorf("getConsumeMesage not recognizing broken widgets")
 	}
 
