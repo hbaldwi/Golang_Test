@@ -17,6 +17,7 @@ There is no guarantee that all produced widgets will be consumed if a broken
 widget is encountered.
 
 ## Alternative Implementations
+### Producer/Consumer Shutdown on Broken Widget Detection
 If minimizing production after producers are signaled to stop (after
 encountering a broken widget) becomes a priority, the send operation could be
 put behind a mutex, and the critical section (prior to send) could contain a
@@ -38,6 +39,16 @@ detect when to shut down was more representative of the general use case. The
 implementation I chose allows producers to finish what they were doing, and can
 easily be extended to allow the goroutines to perform whatever tear-down is
 desired (e.g. closing TCP sockets).
+
+### Unique ID Generation for Widgets
+Each widget could be given a unique ID without locking by giving each producer
+goroutine a non-overlapping range of values to use. The range would have to be
+at least as large as the total number of widgets to prevent collisions in all
+possible schedulings. However, this would mean that the widget ID would no
+longer correspond to the widget number. The widget value would then need to be
+tracked separately in order to ensure that the kth widget is broken, and it
+would need to be incremented using a lock (or another synchronization
+mechanism). This would reduce production throughput.
 
 ## How to Run
 To run the program, the command is `go run main.go [-n <integer> ][-p <integer>
