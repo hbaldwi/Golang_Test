@@ -25,14 +25,15 @@ func (w widget) String() string {
 // PRODUCER LOGIC
 // This struct contains all of the shared data needed to spawn a group of widget producers
 type producer_group struct {
-	number_producers    int         // Number of goroutines to spawn
-	id_mutex            sync.Mutex  // exclusion on incrementation of widget id
-	current_id          int         // Keeps track of the current widget's id number
-	producersShouldStop *bool       // indicates whether or not the producers should halt
-	widget_chan         chan widget // channel to insert the widgets into
-	numOfWidgets        int         // number of widgets to produce
-	badWidgetNum        int
-	wg                  *sync.WaitGroup // waitgroup for the main thread
+	number_producers         int         // Number of goroutines to spawn
+	id_mutex                 sync.Mutex  // exclusion on incrementation of widget id
+	current_id               int         // Keeps track of the current widget's id number
+	producersShouldStop      *bool       // indicates whether or not the producers should halt
+	widget_chan              chan widget // channel to insert the widgets into
+	numOfWidgets             int         // number of widgets to produce
+	badWidgetNum             int
+	wg                       *sync.WaitGroup // waitgroup for the main thread
+	producersShouldStopMutex *sync.Mutex
 }
 
 // Spawns <number_producers> goroutines to produce widgets
@@ -60,9 +61,12 @@ func (g *producer_group) produce(producer_number int) {
 
 // Returns widget given the current producer_group state (or indicates that production needs to stop)
 func (g *producer_group) getWidget(producer_number int) (widget, error) {
+	g.producersShouldStopMutex.Lock()
 	if *g.producersShouldStop {
+		g.producersShouldStopMutex.Unlock()
 		return widget{}, errors.New("Production has been signaled to stop")
 	}
+	g.producersShouldStopMutex.Unlock()
 
 	// Critical section
 	g.id_mutex.Lock()
@@ -94,24 +98,26 @@ func (g *producer_group) getWidget(producer_number int) (widget, error) {
 
 // A constructor for producer_group to simplify initialization
 func newProducer_Group(numProducers, numWidgets, kthBadWidget int,
-	widget_chan chan widget, shouldStop *bool, wg *sync.WaitGroup) producer_group {
+	widget_chan chan widget, shouldStop *bool, wg *sync.WaitGroup, stopMutex *sync.Mutex) producer_group {
 	return producer_group{number_producers: numProducers,
-		id_mutex:            sync.Mutex{},
-		producersShouldStop: shouldStop,
-		current_id:          1,
-		widget_chan:         widget_chan,
-		numOfWidgets:        numWidgets,
-		badWidgetNum:        kthBadWidget,
-		wg:                  wg}
+		id_mutex:                 sync.Mutex{},
+		producersShouldStop:      shouldStop,
+		current_id:               1,
+		widget_chan:              widget_chan,
+		numOfWidgets:             numWidgets,
+		badWidgetNum:             kthBadWidget,
+		wg:                       wg,
+		producersShouldStopMutex: stopMutex}
 }
 
 // CONSUMER LOGIC
 type consumer_group struct {
-	number_consumers    int         // number of consumers to spawn
-	widget_chan         chan widget // channel to receive widgets from
-	producersShouldStop *bool
-	wg                  *sync.WaitGroup
-	producers_done      *bool
+	number_consumers         int         // number of consumers to spawn
+	widget_chan              chan widget // channel to receive widgets from
+	producersShouldStop      *bool
+	wg                       *sync.WaitGroup
+	producers_done           *bool
+	producersShouldStopMutex *sync.Mutex
 }
 
 func (g *consumer_group) spawnConsumers() {
@@ -136,7 +142,9 @@ func (g *consumer_group) consume(consumer_num int) {
 func (g *consumer_group) getConsumeMessage(val widget, consumer_num int) string {
 	// Default case will only be picked if there's nothing on the channel
 	if val.broken {
+		g.producersShouldStopMutex.Lock()
 		*g.producersShouldStop = true
+		g.producersShouldStopMutex.Unlock()
 		return fmt.Sprintf("%s found a broken widget %s -- stopping production\n", "Consumer_"+strconv.Itoa(consumer_num), val)
 	} else {
 		return fmt.Sprintf("%s consumed %s in %s time\n", "Consumer_"+strconv.Itoa(consumer_num), val, time.Now().Sub(val.time))
@@ -144,11 +152,12 @@ func (g *consumer_group) getConsumeMessage(val widget, consumer_num int) string 
 }
 
 // A constructor to simplify consumer group initialization
-func newConsumer_Group(numConsumers int, widget_chan chan widget, wg *sync.WaitGroup, shouldStop *bool) consumer_group {
+func newConsumer_Group(numConsumers int, widget_chan chan widget, wg *sync.WaitGroup, shouldStop *bool, stopMutex *sync.Mutex) consumer_group {
 	return consumer_group{number_consumers: numConsumers,
-		widget_chan:         widget_chan,
-		wg:                  wg,
-		producersShouldStop: shouldStop}
+		widget_chan:              widget_chan,
+		wg:                       wg,
+		producersShouldStop:      shouldStop,
+		producersShouldStopMutex: stopMutex}
 }
 
 // Parses command line arguments and returns quantities for tunable parameters
@@ -213,10 +222,11 @@ func main() {
 	var c_wg sync.WaitGroup
 	c_wg.Add(numConsumers)
 
+	producersShouldStopMutex := sync.Mutex{}
 	producersShouldStop := false
 
-	p_group := newProducer_Group(numProducers, numWidgets, kthBadWidget, widget_chan, &producersShouldStop, &p_wg)
-	c_group := newConsumer_Group(numConsumers, widget_chan, &c_wg, &producersShouldStop)
+	p_group := newProducer_Group(numProducers, numWidgets, kthBadWidget, widget_chan, &producersShouldStop, &p_wg, &producersShouldStopMutex)
+	c_group := newConsumer_Group(numConsumers, widget_chan, &c_wg, &producersShouldStop, &producersShouldStopMutex)
 
 	p_group.spawnProducers()
 	c_group.spawnConsumers()
