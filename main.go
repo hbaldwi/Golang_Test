@@ -26,15 +26,13 @@ func (w widget) String() string {
 // PRODUCER LOGIC
 // producerGroup contains all of the shared data needed to spawn a group of widget producers.
 type producerGroup struct {
-	numberProducers          int         // Number of goroutines to spawn
-	idMutex                  sync.Mutex  // exclusion on incrementation of widget id
-	currentID                int         // Keeps track of the current widget's id number
-	producersShouldStop      *bool       // indicates whether or not the producers should halt
-	widgetChan               chan widget // channel to insert the widgets into
-	numOfWidgets             int         // number of widgets to produce
-	badWidgetNum             int
-	wg                       *sync.WaitGroup // waitgroup for the main thread
-	producersShouldStopMutex *sync.Mutex
+	numberProducers int         // Number of goroutines to spawn
+	numMutex        sync.Mutex  // exclusion on decrementation of remaining widgets
+	widgetChan      chan widget // channel to insert the widgets into
+	numOfWidgets    int         // number of widgets to produce
+	badWidgetNum    int
+	wg              *sync.WaitGroup // waitgroup for the main thread
+	IDChan          chan int
 }
 
 // spawnProducers spawns <number_producers> goroutines to produce widgets
@@ -62,28 +60,24 @@ func (g *producerGroup) produce(producerNumber int) {
 
 // getWidget returns a widget given the current producer_group state (or indicates that production needs to stop).
 func (g *producerGroup) getWidget(producerNumber int) (widget, error) {
-	g.producersShouldStopMutex.Lock()
-	if *g.producersShouldStop {
-		g.producersShouldStopMutex.Unlock()
-		return widget{}, errors.New("production has been signaled to stop")
-	}
-	g.producersShouldStopMutex.Unlock()
 
-	// Critical section
-	g.idMutex.Lock()
-
+	g.numMutex.Lock()
 	if g.numOfWidgets == 0 {
-		g.idMutex.Unlock()
+		g.numMutex.Unlock()
 		return widget{}, errors.New("no more widgets to produce")
 	}
 
-	currentID := g.currentID
-	g.currentID++
 	g.numOfWidgets--
-	g.idMutex.Unlock()
+	g.numMutex.Unlock()
+
+	currentID, ok := <-g.IDChan
+
+	// If the ID channel has been closed, shut down production
+	if !ok {
+		return widget{id: "0"}, errors.New("ID channel has been closed")
+	}
 
 	isBroken := false
-
 	// current_id is also the widget number that we're on
 	if currentID == g.badWidgetNum {
 		isBroken = true
@@ -99,27 +93,25 @@ func (g *producerGroup) getWidget(producerNumber int) (widget, error) {
 
 // newProducerGroup is a constructor for producer_group to simplify initialization.
 func newProducerGroup(numProducers, numWidgets, kthBadWidget int,
-	widgetChan chan widget, shouldStop *bool, wg *sync.WaitGroup, stopMutex *sync.Mutex) producerGroup {
+	widgetChan chan widget, wg *sync.WaitGroup, IDChan chan int) producerGroup {
 	return producerGroup{numberProducers: numProducers,
-		idMutex:                  sync.Mutex{},
-		producersShouldStop:      shouldStop,
-		currentID:                1,
-		widgetChan:               widgetChan,
-		numOfWidgets:             numWidgets,
-		badWidgetNum:             kthBadWidget,
-		wg:                       wg,
-		producersShouldStopMutex: stopMutex}
+		numMutex:     sync.Mutex{},
+		widgetChan:   widgetChan,
+		numOfWidgets: numWidgets,
+		badWidgetNum: kthBadWidget,
+		wg:           wg,
+		IDChan:       IDChan,
+	}
 }
 
 // CONSUMER LOGIC
 // consumerGroup contains all of the shared data needed to spawn a group of widget consumers.
 type consumerGroup struct {
-	numberConsumers          int         // number of consumers to spawn
-	widgetChan               chan widget // channel to receive widgets from
-	producersShouldStop      *bool
-	wg                       *sync.WaitGroup
-	producersDone            *bool
-	producersShouldStopMutex *sync.Mutex
+	numberConsumers int         // number of consumers to spawn
+	widgetChan      chan widget // channel to receive widgets from
+	wg              *sync.WaitGroup
+	producersDone   *bool
+	sigChan         chan int
 }
 
 func (g *consumerGroup) spawnConsumers() {
@@ -144,21 +136,20 @@ func (g *consumerGroup) consume(consumerNum int) {
 func (g *consumerGroup) getConsumeMessage(val widget, consumerNum int) string {
 	// Default case will only be picked if there's nothing on the channel
 	if val.broken {
-		g.producersShouldStopMutex.Lock()
-		*g.producersShouldStop = true
-		g.producersShouldStopMutex.Unlock()
+		// Only one ID generator goroutine for now, so only one signal is needed
+		g.sigChan <- 1
 		return fmt.Sprintf("%s found a broken widget %s -- stopping production\n", "Consumer_"+strconv.Itoa(consumerNum), val)
 	}
 	return fmt.Sprintf("%s consumed %s in %s time\n", "Consumer_"+strconv.Itoa(consumerNum), val, time.Now().Sub(val.time))
 }
 
 // newConsumerGroup is a constructor to simplify consumer group initialization.
-func newConsumerGroup(numConsumers int, widgetChan chan widget, wg *sync.WaitGroup, shouldStop *bool, stopMutex *sync.Mutex) consumerGroup {
+func newConsumerGroup(numConsumers int, widgetChan chan widget, wg *sync.WaitGroup, sigChan chan int) consumerGroup {
 	return consumerGroup{numberConsumers: numConsumers,
-		widgetChan:               widgetChan,
-		wg:                       wg,
-		producersShouldStop:      shouldStop,
-		producersShouldStopMutex: stopMutex}
+		widgetChan: widgetChan,
+		wg:         wg,
+		sigChan:    sigChan,
+	}
 }
 
 // parseArgs parses command line arguments and returns quantities for tunable parameters.
@@ -208,13 +199,37 @@ func max(a, b int) int {
 	return b
 }
 
+func generateIDs(IDChan, sigChan chan int, numWidgets int) {
+	for i := 1; i <= numWidgets; i++ {
+		select {
+		case <-sigChan:
+			close(IDChan)
+			return
+		default:
+			IDChan <- i
+		}
+	}
+
+	// Blocking read
+	<-sigChan
+	close(IDChan)
+}
+
 func main() {
+
 	numWidgets, numConsumers, numProducers, kthBadWidget, err := parseArgs(os.Args[1:])
 
 	if err != nil {
 		panic("Invalid arguments! The format is: go run main.go [-n <integer> ][-p <integer> ][-c <integer> ][-k <integer> ], where brackets denote an optional argument.")
 	}
-	widgetChan := make(chan widget, max(100000, numWidgets))
+
+	// The buffer limits are somewhat arbitrary, but need some kind of cap
+	const bufferLimit int = 100000
+	widgetChan := make(chan widget, max(bufferLimit, numWidgets))
+	IDChan := make(chan int, max(bufferLimit, numWidgets))
+	sigChan := make(chan int)
+
+	go generateIDs(IDChan, sigChan, numWidgets)
 
 	// https://stackoverflow.com/questions/19208725/example-for-sync-waitgroup-correct
 	var producerWG sync.WaitGroup
@@ -223,16 +238,13 @@ func main() {
 	var consumerWG sync.WaitGroup
 	consumerWG.Add(numConsumers)
 
-	producersShouldStopMutex := sync.Mutex{}
-	producersShouldStop := false
-
-	producerGroup := newProducerGroup(numProducers, numWidgets, kthBadWidget, widgetChan, &producersShouldStop, &producerWG, &producersShouldStopMutex)
-	consumerGroup := newConsumerGroup(numConsumers, widgetChan, &consumerWG, &producersShouldStop, &producersShouldStopMutex)
+	producerGroup := newProducerGroup(numProducers, numWidgets, kthBadWidget, widgetChan, &producerWG, IDChan)
+	consumerGroup := newConsumerGroup(numConsumers, widgetChan, &consumerWG, sigChan)
 
 	producerGroup.spawnProducers()
 	consumerGroup.spawnConsumers()
 
 	producerWG.Wait() // Will wait until all producers exit
-	close(widgetChan) // Signal consumers to return
+	close(widgetChan)
 	consumerWG.Wait()
 }

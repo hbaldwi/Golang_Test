@@ -8,13 +8,23 @@ simplifying function interfaces and avoiding namespace pollution.
 The communication channel between producers and consumers is provided by a
 buffered channel in order to maximize production throughput; with a buffered
 channel, sends into the channel will not block provided that the buffer isn't
-full.  Upon consuming a broken widget, a consumer signals that the production
-line should halt by setting a shared bool, producersShouldStop, to true. After
-producersShouldStop has been set to true, each producer goroutine will produce
-up to one additional widget, after which it will return. After all producers 
-have returned, the channel will be closed, causing the consumers to return.
-There is no guarantee that all produced widgets will be consumed if a broken
-widget is encountered.
+full.
+
+### After Producing N Widgets
+The producer goroutines track how many widgets have been produced by atomically
+decrementing numOfWidgets. When this value reaches 0, a producer goroutine will
+return after finishing whatever it was doing. After all producer goroutines
+have returned, the main goroutine will close the widget channel, allowing
+consumers to return after consuming all produced widgets.
+
+### Upon Consuming a Broken Widget
+After consuming a broken widget, the consumer will send a signal (via sigChan)
+to the ID generation goroutine which will cause the ID channel to be closed.
+Each producer goroutine will then finish the widget it was producing, detect
+that the ID channel is closed, and return. Once all producer goroutines have
+returned, the widget channel will be closed, allowing consumers to return after
+all widgets are consumed. Even if a broken widget is consumed, all produced
+widgets are guaranteed to be consumed.
 
 ## Alternative Implementations
 ### Producer/Consumer Shutdown on Broken Widget Detection
