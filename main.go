@@ -1,3 +1,4 @@
+// An implementation of a widget producer/consumer pipeline with error handling
 package main
 
 import (
@@ -16,14 +17,14 @@ type widget struct {
 	broken bool
 }
 
-// Provides an implementation of the Stringer interface for widget, allowing it to be printed
+// String provides an implementation of the Stringer interface for widget, allowing it to be printed.
 func (w widget) String() string {
 	hour, minute, second := w.time.Clock()
 	return fmt.Sprintf("[id=%s source=%s time=%d:%d:%d.%d broken=%t]", w.id, w.source, hour, minute, second, w.time.Nanosecond(), w.broken)
 }
 
 // PRODUCER LOGIC
-// This struct contains all of the shared data needed to spawn a group of widget producers
+// producerGroup contains all of the shared data needed to spawn a group of widget producers.
 type producerGroup struct {
 	numberProducers          int         // Number of goroutines to spawn
 	idMutex                  sync.Mutex  // exclusion on incrementation of widget id
@@ -36,15 +37,15 @@ type producerGroup struct {
 	producersShouldStopMutex *sync.Mutex
 }
 
-// Spawns <number_producers> goroutines to produce widgets
+// spawnProducers spawns <number_producers> goroutines to produce widgets
 func (g *producerGroup) spawnProducers() {
 	for i := 1; i <= g.numberProducers; i++ {
 		go g.produce(i)
 	}
 }
 
-// Produces widgets until being signaled to stop (with producersShouldStop), or running
-// out of widgets, then calls wg.Done() to unblock the main thread
+// produce() produces widgets until being signaled to stop (with producersShouldStop), or running
+// out of widgets, then calls wg.Done() to unblock the main thread.
 func (g *producerGroup) produce(producerNumber int) {
 	defer g.wg.Done()
 	for {
@@ -59,12 +60,12 @@ func (g *producerGroup) produce(producerNumber int) {
 	}
 }
 
-// Returns widget given the current producer_group state (or indicates that production needs to stop)
+// getWidget returns widget given the current producer_group state (or indicates that production needs to stop).
 func (g *producerGroup) getWidget(producerNumber int) (widget, error) {
 	g.producersShouldStopMutex.Lock()
 	if *g.producersShouldStop {
 		g.producersShouldStopMutex.Unlock()
-		return widget{}, errors.New("Production has been signaled to stop")
+		return widget{}, errors.New("production has been signaled to stop")
 	}
 	g.producersShouldStopMutex.Unlock()
 
@@ -73,7 +74,7 @@ func (g *producerGroup) getWidget(producerNumber int) (widget, error) {
 
 	if g.numOfWidgets == 0 {
 		g.idMutex.Unlock()
-		return widget{}, errors.New("No more widgets to produce")
+		return widget{}, errors.New("no more widgets to produce")
 	}
 
 	currentID := g.currentID
@@ -96,7 +97,7 @@ func (g *producerGroup) getWidget(producerNumber int) (widget, error) {
 	return newWidget, nil
 }
 
-// A constructor for producer_group to simplify initialization
+// newProducerGroup is a  constructor for producer_group to simplify initialization.
 func newProducerGroup(numProducers, numWidgets, kthBadWidget int,
 	widgetChan chan widget, shouldStop *bool, wg *sync.WaitGroup, stopMutex *sync.Mutex) producerGroup {
 	return producerGroup{numberProducers: numProducers,
@@ -111,6 +112,8 @@ func newProducerGroup(numProducers, numWidgets, kthBadWidget int,
 }
 
 // CONSUMER LOGIC
+// consumerGroup contains all of the shared data needed to spawn a group of widget consumers.
+
 type consumerGroup struct {
 	numberConsumers          int         // number of consumers to spawn
 	widgetChan               chan widget // channel to receive widgets from
@@ -138,7 +141,7 @@ func (g *consumerGroup) consume(consumerNum int) {
 	return
 }
 
-// Returns the message that the consumer should print out
+// getConsumeMessage returns the message that the consumer should print out.
 func (g *consumerGroup) getConsumeMessage(val widget, consumerNum int) string {
 	// Default case will only be picked if there's nothing on the channel
 	if val.broken {
@@ -150,7 +153,7 @@ func (g *consumerGroup) getConsumeMessage(val widget, consumerNum int) string {
 	return fmt.Sprintf("%s consumed %s in %s time\n", "Consumer_"+strconv.Itoa(consumerNum), val, time.Now().Sub(val.time))
 }
 
-// A constructor to simplify consumer group initialization
+// newConsumerGroup is constructor to simplify consumer group initialization.
 func newConsumerGroup(numConsumers int, widgetChan chan widget, wg *sync.WaitGroup, shouldStop *bool, stopMutex *sync.Mutex) consumerGroup {
 	return consumerGroup{numberConsumers: numConsumers,
 		widgetChan:               widgetChan,
@@ -159,12 +162,12 @@ func newConsumerGroup(numConsumers int, widgetChan chan widget, wg *sync.WaitGro
 		producersShouldStopMutex: stopMutex}
 }
 
-// Parses command line arguments and returns quantities for tunable parameters
+// parseArgs parses command line arguments and returns quantities for tunable parameters.
 func parseArgs(arguments []string) (numWidg, numCons, numProd, kthBadWidg int, err error) {
 
 	// If we don't have an even number of arguments, things haven't been paired up correctly, so panic.
 	if len(arguments)%2 != 0 {
-		return 0, 0, 0, 0, errors.New("Invalid number of options")
+		return 0, 0, 0, 0, errors.New("invalid number of options")
 	}
 
 	// Default values
@@ -176,7 +179,7 @@ func parseArgs(arguments []string) (numWidg, numCons, numProd, kthBadWidg int, e
 
 		// If the string after the option can't be converted to an integer, panic.
 		if err != nil {
-			return 0, 0, 0, 0, errors.New("Can't convert quantity to integer")
+			return 0, 0, 0, 0, errors.New("can't convert quantity to integer")
 		}
 
 		switch option {
@@ -189,7 +192,7 @@ func parseArgs(arguments []string) (numWidg, numCons, numProd, kthBadWidg int, e
 		case "-k":
 			kthBadWidget = quantity
 		default:
-			return 0, 0, 0, 0, errors.New("Invalid option")
+			return 0, 0, 0, 0, errors.New("invalid option")
 		}
 
 		// Move the argument list over by two, so to the next optoin and integer pair
