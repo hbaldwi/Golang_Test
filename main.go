@@ -60,7 +60,7 @@ func (g *producerGroup) produce(producerNumber int) {
 	}
 }
 
-// getWidget returns widget given the current producer_group state (or indicates that production needs to stop).
+// getWidget returns a widget given the current producer_group state (or indicates that production needs to stop).
 func (g *producerGroup) getWidget(producerNumber int) (widget, error) {
 	g.producersShouldStopMutex.Lock()
 	if *g.producersShouldStop {
@@ -97,7 +97,7 @@ func (g *producerGroup) getWidget(producerNumber int) (widget, error) {
 	return newWidget, nil
 }
 
-// newProducerGroup is a  constructor for producer_group to simplify initialization.
+// newProducerGroup is a constructor for producer_group to simplify initialization.
 func newProducerGroup(numProducers, numWidgets, kthBadWidget int,
 	widgetChan chan widget, shouldStop *bool, wg *sync.WaitGroup, stopMutex *sync.Mutex) producerGroup {
 	return producerGroup{numberProducers: numProducers,
@@ -113,7 +113,6 @@ func newProducerGroup(numProducers, numWidgets, kthBadWidget int,
 
 // CONSUMER LOGIC
 // consumerGroup contains all of the shared data needed to spawn a group of widget consumers.
-
 type consumerGroup struct {
 	numberConsumers          int         // number of consumers to spawn
 	widgetChan               chan widget // channel to receive widgets from
@@ -153,7 +152,7 @@ func (g *consumerGroup) getConsumeMessage(val widget, consumerNum int) string {
 	return fmt.Sprintf("%s consumed %s in %s time\n", "Consumer_"+strconv.Itoa(consumerNum), val, time.Now().Sub(val.time))
 }
 
-// newConsumerGroup is constructor to simplify consumer group initialization.
+// newConsumerGroup is a constructor to simplify consumer group initialization.
 func newConsumerGroup(numConsumers int, widgetChan chan widget, wg *sync.WaitGroup, shouldStop *bool, stopMutex *sync.Mutex) consumerGroup {
 	return consumerGroup{numberConsumers: numConsumers,
 		widgetChan:               widgetChan,
